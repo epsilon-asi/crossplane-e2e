@@ -1,0 +1,18 @@
+apiVersion: kubernetes.m.crossplane.io/v1alpha1
+kind: Object
+metadata:
+  name: configmap
+  namespace: e2e-${RUN_ID}
+spec:
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: in-cluster
+  forProvider:
+    manifest:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: managed
+        namespace: e2e-${RUN_ID}
+      data:
+        greeting: hello

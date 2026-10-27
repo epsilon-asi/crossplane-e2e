@@ -1,0 +1,11 @@
+# Go
+*.test
+*.out
+/bin/
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+# Local credentials for paid-provider suites
+.env
+*.env
