@@ -1,5 +1,7 @@
 # crossplane-e2e
 
+[![CI](https://github.com/epsilon-asi/crossplane-e2e/actions/workflows/ci.yml/badge.svg)](https://github.com/epsilon-asi/crossplane-e2e/actions/workflows/ci.yml)
+
 End-to-end tests for Crossplane providers on ephemeral k3s clusters (via k3d).
 
 Each provider suite gets a fresh cluster with Crossplane and the provider
