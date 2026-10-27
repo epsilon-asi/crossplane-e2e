@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  unit:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "::error::gofmt needed on: $unformatted"; exit 1; fi
+      - name: go mod tidy
+        run: go mod tidy -diff
+      - name: go vet
+        run: go vet ./...
+      - name: Unit tests
+        run: go test -race ./harness/
+
+  e2e:
+    name: E2E (${{ matrix.package }} package)
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # registry: install provider-kubernetes from xpkg.crossplane.io.
+        # local: install it from a package file, as a provider repo's CI would
+        # with the package its build produced.
+        package: [registry, local]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install k3d
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          hack/install-k3d.sh "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Fetch provider package file
+        if: matrix.package == 'local'
+        run: |
+          go run github.com/google/go-containerregistry/cmd/crane@v0.22.1 pull \
+            --platform "linux/$(go env GOARCH)" \
+            xpkg.crossplane.io/crossplane-contrib/provider-kubernetes:v1.4.1 \
+            "$RUNNER_TEMP/provider-kubernetes.xpkg"
+          echo "XP_E2E_PACKAGE_PROVIDER_KUBERNETES=$RUNNER_TEMP/provider-kubernetes.xpkg" >> "$GITHUB_ENV"
+      - name: Run provider-kubernetes suite
+        env:
+          XP_E2E_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
+        run: go test ./providers/kubernetes/ -v -count=1 -timeout 20m
+      - name: Clusters left behind
+        if: always()
+        run: k3d cluster list
+
+  failure-demo:
+    name: Cleanup after failures (${{ matrix.mode }})
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [steps, env-setup]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install k3d
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          hack/install-k3d.sh "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Run deliberately failing suite
+        run: hack/check-failure-demo.sh "${{ matrix.mode }}"
