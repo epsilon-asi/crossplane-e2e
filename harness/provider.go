@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -24,6 +25,10 @@ type Provider struct {
 	// PreInstall manifests are applied before the Provider, e.g. a
 	// DeploymentRuntimeConfig and RBAC for the provider's service account.
 	PreInstall []string
+	// Credentials are Secrets created from environment variables after
+	// PreInstall and before the provider and PostInstall. Their variables
+	// are requirements of the whole suite.
+	Credentials []SecretFromEnv
 	// PostInstall manifests are applied once the provider is healthy, e.g.
 	// ProviderConfigs.
 	PostInstall []string
@@ -71,8 +76,15 @@ func installProvider(p Provider, vars map[string]string) env.Func {
 			return ctx, err
 		}
 
+		if err := Apply(ctx, c, pre); err != nil {
+			return ctx, fmt.Errorf("provider %s: %w", p.Name, err)
+		}
+		if err := applyCredentials(ctx, c, p.Credentials, os.LookupEnv, runLabels(vars)); err != nil {
+			return ctx, fmt.Errorf("provider %s credentials: %w", p.Name, err)
+		}
 		pkg := p.object()
-		if err := Apply(ctx, c, append(pre, pkg)); err != nil {
+		addLabels([]*unstructured.Unstructured{pkg}, runLabels(vars))
+		if err := Apply(ctx, c, []*unstructured.Unstructured{pkg}); err != nil {
 			return ctx, fmt.Errorf("provider %s: %w", p.Name, err)
 		}
 		if err := WaitForConditions(ctx, c, []*unstructured.Unstructured{pkg}, []string{"Installed", "Healthy"}, p.Timeout); err != nil {
