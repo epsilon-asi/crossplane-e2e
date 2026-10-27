@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"sigs.k8s.io/e2e-framework/pkg/env"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -49,6 +50,15 @@ type Config struct {
 	// Vars are substituted for ${NAME} references in every manifest the
 	// harness applies. RUN_ID is always set to a value unique to the run.
 	Vars map[string]string
+
+	// Requires gates the whole suite; see Requirements. The variables of
+	// every Provider's Credentials are added automatically.
+	Requires Requirements
+	// Sweepers find and delete leftover external resources; see Sweeper.
+	Sweepers []Sweeper
+	// CleanupTimeout bounds each of the end-of-run deletion of managed
+	// resources and the sweepers. Defaults to DefaultCleanupTimeout.
+	CleanupTimeout time.Duration
 }
 
 // Suite is a configured environment shared by the tests of one package.
@@ -56,6 +66,7 @@ type Suite struct {
 	cfg  Config
 	env  env.Environment
 	vars map[string]string
+	safety
 }
 
 // NewSuite builds a suite from cfg, applying environment variable overrides.
@@ -71,6 +82,9 @@ func NewSuite(cfg Config) *Suite {
 	}
 	if v, err := strconv.ParseBool(os.Getenv(EnvKeep)); err == nil && v {
 		cfg.KeepCluster = true
+	}
+	if envTrue(os.LookupEnv, EnvKeepResources) {
+		cfg.KeepCluster = true // deleting the cluster would orphan them
 	}
 	if v := os.Getenv(EnvK3sImage); v != "" {
 		cfg.K3sImage = v
@@ -94,12 +108,14 @@ func NewSuite(cfg Config) *Suite {
 	}
 
 	s := &Suite{cfg: cfg, env: env.NewWithConfig(envCfg), vars: vars}
+	s.initSafety()
 
 	setup := []env.Func{createCluster(cfg.ClusterName, cfg.K3sImage), installCrossplane(cfg.Crossplane)}
 	for _, p := range cfg.Providers {
 		setup = append(setup, installProvider(p, vars))
 	}
 	s.env.Setup(setup...)
+	s.env.Finish(s.cleanupRun()) // before the cluster is deleted
 	if !cfg.KeepCluster {
 		s.env.Finish(deleteCluster(cfg.ClusterName))
 	}
@@ -107,10 +123,14 @@ func NewSuite(cfg Config) *Suite {
 }
 
 // Run runs the package's tests. Call it from TestMain.
-func (s *Suite) Run(m *testing.M) int {
+func (s *Suite) Run(m *testing.M) (code int) {
+	if code, done := s.preRun(m); done {
+		return code
+	}
+	defer s.postRun(&code)
 	log.Printf("cluster=%s keep=%t k3s=%s crossplane=%s run_id=%s",
 		s.cfg.ClusterName, s.cfg.KeepCluster, s.cfg.K3sImage, s.cfg.Crossplane.Version, s.vars["RUN_ID"])
-	code := s.env.Run(m)
+	code = s.env.Run(m)
 	if s.cfg.KeepCluster {
 		log.Printf("cluster %q kept; delete it with: k3d cluster delete %s", s.cfg.ClusterName, s.cfg.ClusterName)
 	}
@@ -120,6 +140,7 @@ func (s *Suite) Run(m *testing.M) int {
 // Test runs a managed resource lifecycle test.
 func (s *Suite) Test(t *testing.T, rt ResourceTest) {
 	t.Helper()
+	s.skipIfUnavailable(t)
 	s.env.Test(t, rt.feature(s.vars))
 }
 
