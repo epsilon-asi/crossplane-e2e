@@ -3,6 +3,8 @@ package harness
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -62,29 +64,66 @@ func conditionsMet(u *unstructured.Unstructured, want []string) bool {
 // On timeout the error includes the object's current conditions.
 func WaitForConditions(ctx context.Context, c client.Client, objs []*unstructured.Unstructured, want []string, timeout time.Duration) error {
 	for _, o := range objs {
-		live := o.DeepCopy()
-		err := wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-			if err := c.Get(ctx, client.ObjectKeyFromObject(o), live); err != nil {
+		var live *unstructured.Unstructured
+		err := poll(ctx, 2*time.Second, timeout, func(ctx context.Context) (bool, error) {
+			l := o.DeepCopy()
+			if err := c.Get(ctx, client.ObjectKeyFromObject(o), l); err != nil {
 				return false, client.IgnoreNotFound(err)
 			}
+			live = l
 			return conditionsMet(live, want), nil
 		})
 		if err != nil {
-			return fmt.Errorf("%s did not reach %v: %w\n%s", describe(o), want, err, summarizeConditions(live))
+			state := "  (object not found)"
+			if live != nil {
+				state = summarizeConditions(live, want)
+			}
+			return fmt.Errorf("%s did not reach %v: %w\n%s", describe(o), want, err, state)
 		}
 	}
 	return nil
 }
 
-func summarizeConditions(u *unstructured.Unstructured) string {
+// summarizeConditions describes u's conditions, wanted ones first, noting any
+// wanted condition the controller has not reported at all.
+func summarizeConditions(u *unstructured.Unstructured, want []string) string {
 	have := conditionsOf(u)
-	if len(have) == 0 {
+	types := slices.Clone(want)
+	others := slices.Sorted(maps.Keys(have))
+	for _, t := range others {
+		if !slices.Contains(types, t) {
+			types = append(types, t)
+		}
+	}
+	if len(types) == 0 {
 		return "  (no conditions reported)"
 	}
 	var b strings.Builder
-	for _, c := range have {
+	for _, t := range types {
+		c, ok := have[t]
+		if !ok {
+			fmt.Fprintf(&b, "  %s: not reported\n", t)
+			continue
+		}
 		fmt.Fprintf(&b, "  %s=%s reason=%s generation=%d/%d message=%q\n",
 			c.Type, c.Status, c.Reason, c.ObservedGeneration, u.GetGeneration(), c.Message)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// poll calls fn every interval until it reports done or returns an error, or
+// until timeout. fn gets ctx rather than a context carrying the timeout, so
+// the timeout is reported as such rather than as an error from whichever call
+// it would have cut short (client-go's rate limiter fails a request early with
+// "rate: Wait(n=1) would exceed context deadline").
+func poll(ctx context.Context, interval, timeout time.Duration, fn wait.ConditionWithContextFunc) error {
+	pctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	err := wait.PollUntilContextCancel(pctx, interval, true, func(context.Context) (bool, error) {
+		return fn(ctx)
+	})
+	if err != nil && ctx.Err() == nil && pctx.Err() != nil {
+		return fmt.Errorf("timed out after %s", timeout)
+	}
+	return err
 }
