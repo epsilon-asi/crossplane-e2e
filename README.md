@@ -1,4 +1,4 @@
-# crossplane-test-environment
+# crossplane-e2e
 
 End-to-end tests for Crossplane providers on ephemeral k3s clusters (via k3d).
 
@@ -22,11 +22,31 @@ go test ./providers/kubernetes/ -v -count=1 -timeout 20m
 | `XP_E2E_KEEP=true` | Keep the generated cluster after the run. |
 | `XP_E2E_K3S_IMAGE` | Override the k3s node image. |
 | `XP_E2E_CROSSPLANE_VERSION` | Override the Crossplane chart version. |
+| `XP_E2E_PACKAGE_<PROVIDER>` | Override a provider's package, e.g. `XP_E2E_PACKAGE_PROVIDER_KUBERNETES`. A registry reference or a package file (see below). |
+| `XP_E2E_RUN_ID` | Use this run ID instead of a random one (lowercase letters, digits, dashes; max 20). Lets CI name a run before it starts and sweep it afterwards. |
 
 The harness writes its own kubeconfig (`$TMPDIR/xp-e2e-<cluster>.kubeconfig`);
 it never changes your current context. `XP_E2E_CLUSTER` matches the cluster
 name exactly; a reused cluster keeps the image and arguments it was created
 with, and Crossplane and the providers are re-applied idempotently.
+
+### Testing a locally built package
+
+A provider's `Package` can be the path of a package file, such as the
+`.xpkg` a provider build produces, instead of a registry reference. The
+harness then creates the cluster with its own registry
+(`<cluster>-reg.localhost`, deleted with the cluster), pushes the file there
+and installs the provider from it, so unpublished builds can be tested without
+pushing them anywhere. Use the package built for the cluster's architecture
+(`linux/arm64` on Apple Silicon, `linux/amd64` on most CI runners). Give an
+absolute path: Go runs tests in their package's directory. A cluster reused
+with `XP_E2E_CLUSTER` must have been created by a run that used a package
+file.
+
+```bash
+XP_E2E_PACKAGE_PROVIDER_KUBERNETES="$PWD/_output/xpkg/linux_arm64/provider-kubernetes.xpkg" \
+  go test ./providers/kubernetes/ -v -count=1 -timeout 20m
+```
 
 ## Failures and cleanup
 
@@ -63,6 +83,30 @@ XP_E2E_FAILURE_DEMO=env-setup go test ./providers/kubernetes/failures/ -v -count
 - `providers/<name>/` — one Go test package per provider: a `TestMain` that
   declares the provider to install, test manifests under `testdata/`, and the
   checks against that provider's external system.
+
+## Using it from a provider's repo
+
+Keep the provider's e2e tests in their own Go module (e.g. `e2e/go.mod`), so
+the harness's Kubernetes dependencies don't constrain the provider's:
+
+```bash
+mkdir e2e && cd e2e
+go mod init github.com/<org>/<provider>/e2e
+go get github.com/epsilon-asi/crossplane-e2e@latest
+```
+
+Write the suite as described in "Adding a provider" below, with the published
+package as `Package`. In CI, build the provider, then point the suite at the
+package file the build produced:
+
+```bash
+export XP_E2E_PACKAGE_PROVIDER_FOO="$PWD/_output/xpkg/linux_amd64/provider-foo.xpkg"
+export XP_E2E_RUN_ID="gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+cd e2e && go test ./... -v -count=1 -timeout 30m
+```
+
+Use an absolute path for the package: Go runs each test in its package's
+directory.
 
 ## Adding a provider
 

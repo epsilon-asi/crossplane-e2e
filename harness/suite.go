@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -32,7 +34,13 @@ const (
 	EnvK3sImage = "XP_E2E_K3S_IMAGE"
 	// EnvCrossplaneVersion overrides Config.Crossplane.Version.
 	EnvCrossplaneVersion = "XP_E2E_CROSSPLANE_VERSION"
+	// EnvRunID sets the run ID instead of generating one, so that a CI job
+	// can name the run before it starts and sweep it afterwards. Lowercase
+	// letters, digits and dashes, at most 20 characters.
+	EnvRunID = "XP_E2E_RUN_ID"
 )
+
+var validRunID = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$`)
 
 // Config describes the environment a provider suite runs against.
 type Config struct {
@@ -74,6 +82,12 @@ type Suite struct {
 // NewSuite builds a suite from cfg, applying environment variable overrides.
 func NewSuite(cfg Config) *Suite {
 	runID := randomID()
+	if v := os.Getenv(EnvRunID); v != "" {
+		if !validRunID.MatchString(v) {
+			log.Fatalf("%s=%q: want lowercase letters, digits and dashes, at most 20 characters", EnvRunID, v)
+		}
+		runID = v
+	}
 
 	if v := os.Getenv(EnvCluster); v != "" {
 		cfg.ClusterName = v
@@ -99,6 +113,19 @@ func NewSuite(cfg Config) *Suite {
 	}
 	cfg.Crossplane.setDefaults()
 
+	cfg.Providers = slices.Clone(cfg.Providers)
+	registry := false
+	for i := range cfg.Providers {
+		p := &cfg.Providers[i]
+		if v := os.Getenv(PackageEnvVar(p.Name)); v != "" {
+			p.Package = v
+		}
+		if looksLikePath(p.Package) && !isLocalPackage(p.Package) {
+			log.Fatalf("provider %s: package file %q not found (relative paths are resolved from the test package's directory; use an absolute path)", p.Name, p.Package)
+		}
+		registry = registry || isLocalPackage(p.Package)
+	}
+
 	vars := map[string]string{"RUN_ID": runID}
 	for k, v := range cfg.Vars {
 		vars[k] = v
@@ -112,9 +139,9 @@ func NewSuite(cfg Config) *Suite {
 	s := &Suite{cfg: cfg, env: env.NewWithConfig(envCfg), vars: vars}
 	s.initSafety()
 
-	setup := []env.Func{createCluster(cfg.ClusterName, cfg.K3sImage), installCrossplane(cfg.Crossplane)}
+	setup := []env.Func{createCluster(cfg.ClusterName, cfg.K3sImage, registry), installCrossplane(cfg.Crossplane)}
 	for _, p := range cfg.Providers {
-		setup = append(setup, installProvider(p, vars))
+		setup = append(setup, installProvider(p, vars, cfg.ClusterName))
 	}
 	s.env.Setup(setup...)
 	s.env.Finish(s.cleanupRun()) // before the cluster is deleted

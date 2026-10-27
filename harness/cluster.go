@@ -79,8 +79,9 @@ func kubeconfigPath(name string) string {
 }
 
 // createCluster creates the named k3d cluster, or reuses it if a cluster with
-// exactly that name exists, and points the environment's client at it.
-func createCluster(name, image string) env.Func {
+// exactly that name exists, and points the environment's client at it. With
+// registry, a new cluster gets a registry for local packages.
+func createCluster(name, image string, registry bool) env.Func {
 	return func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 		start := time.Now()
 		exists, err := ClusterExists(ctx, name)
@@ -96,6 +97,13 @@ func createCluster(name, image string) env.Func {
 			}
 		} else {
 			args := append([]string{"cluster", "create", name, "--image", image}, k3dArgs...)
+			if registry {
+				reg, err := registryCreateArg(name)
+				if err != nil {
+					return ctx, err
+				}
+				args = append(args, reg...)
+			}
 			if _, err := k3d(ctx, args...); err != nil {
 				return ctx, fmt.Errorf("creating k3d cluster %q: %w", name, err)
 			}
