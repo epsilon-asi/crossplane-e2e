@@ -17,7 +17,10 @@ type Provider struct {
 	// Name of the Provider object.
 	Name string
 	// Package is the fully qualified package reference, e.g.
-	// xpkg.crossplane.io/crossplane-contrib/provider-kubernetes:v1.4.1.
+	// xpkg.crossplane.io/crossplane-contrib/provider-kubernetes:v1.4.1, or
+	// the path of a package file such as the .xpkg a provider build produces,
+	// which is pushed to a registry inside the cluster. PackageEnvVar(Name)
+	// overrides it at run time.
 	Package string
 	// RuntimeConfigName references a DeploymentRuntimeConfig, typically one
 	// created by PreInstall.
@@ -55,7 +58,7 @@ func (p Provider) object() *unstructured.Unstructured {
 
 // installProvider installs the provider package, waits until it is installed
 // and healthy, then applies its PostInstall manifests.
-func installProvider(p Provider, vars map[string]string) env.Func {
+func installProvider(p Provider, vars map[string]string, cluster string) env.Func {
 	return func(ctx context.Context, cfg *envconf.Config) (context.Context, error) {
 		start := time.Now()
 		if p.Timeout == 0 {
@@ -81,6 +84,13 @@ func installProvider(p Provider, vars map[string]string) env.Func {
 		}
 		if err := applyCredentials(ctx, c, p.Credentials, os.LookupEnv, runLabels(vars)); err != nil {
 			return ctx, fmt.Errorf("provider %s credentials: %w", p.Name, err)
+		}
+		if isLocalPackage(p.Package) {
+			ref, err := pushLocalPackage(ctx, cluster, p.Name, "e2e-"+vars["RUN_ID"], p.Package)
+			if err != nil {
+				return ctx, fmt.Errorf("provider %s: %w", p.Name, err)
+			}
+			p.Package = ref
 		}
 		pkg := p.object()
 		addLabels([]*unstructured.Unstructured{pkg}, runLabels(vars))

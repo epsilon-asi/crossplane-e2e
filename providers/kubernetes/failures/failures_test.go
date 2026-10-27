@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"crossplane-test-environment/harness"
+	"github.com/epsilon-asi/crossplane-e2e/harness"
 )
 
 // EnvDemo selects the failure demo mode: "steps" or "env-setup".
