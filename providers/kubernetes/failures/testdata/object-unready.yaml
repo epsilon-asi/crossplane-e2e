@@ -1,0 +1,19 @@
+# References a ProviderConfig that does not exist, so it never becomes Ready.
+apiVersion: kubernetes.m.crossplane.io/v1alpha1
+kind: Object
+metadata:
+  name: configmap
+  namespace: e2e-${RUN_ID}-timeout
+spec:
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: does-not-exist
+  forProvider:
+    manifest:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: managed
+        namespace: e2e-${RUN_ID}-timeout
+      data:
+        greeting: hello

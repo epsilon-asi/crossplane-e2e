@@ -1,0 +1,20 @@
+# The API server rejects this name, so applying it fails after the namespace
+# prerequisite has already been created.
+apiVersion: kubernetes.m.crossplane.io/v1alpha1
+kind: Object
+metadata:
+  name: Invalid_Name
+  namespace: e2e-${RUN_ID}-create
+spec:
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: in-cluster
+  forProvider:
+    manifest:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: managed
+        namespace: e2e-${RUN_ID}-create
+      data:
+        greeting: hello

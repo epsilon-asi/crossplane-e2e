@@ -13,7 +13,6 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -88,16 +87,18 @@ func LoadAll(paths []string, vars map[string]string) ([]*unstructured.Unstructur
 // until the API server serves them.
 func Apply(ctx context.Context, c client.Client, objs []*unstructured.Unstructured) error {
 	for _, o := range objs {
-		err := wait.PollUntilContextTimeout(ctx, time.Second, time.Minute, true, func(ctx context.Context) (bool, error) {
+		var noMatch error
+		err := poll(ctx, time.Second, time.Minute, func(ctx context.Context) (bool, error) {
 			ac := client.ApplyConfigurationFromUnstructured(o.DeepCopy())
 			err := c.Apply(ctx, ac, client.FieldOwner(fieldOwner), client.ForceOwnership)
 			if meta.IsNoMatchError(err) {
+				noMatch = err
 				return false, nil
 			}
 			return err == nil, err
 		})
 		if err != nil {
-			return fmt.Errorf("applying %s: %w", describe(o), err)
+			return fmt.Errorf("applying %s: %w", describe(o), errors.Join(err, noMatch))
 		}
 	}
 	return nil
@@ -119,15 +120,25 @@ func Delete(ctx context.Context, c client.Client, objs []*unstructured.Unstructu
 // removed its finalizer.
 func WaitForDeletion(ctx context.Context, c client.Client, objs []*unstructured.Unstructured, timeout time.Duration) error {
 	for _, o := range objs {
-		err := wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
-			err := c.Get(ctx, client.ObjectKeyFromObject(o), o.DeepCopy())
+		var live *unstructured.Unstructured
+		err := poll(ctx, 2*time.Second, timeout, func(ctx context.Context) (bool, error) {
+			l := o.DeepCopy()
+			err := c.Get(ctx, client.ObjectKeyFromObject(o), l)
 			if kerrors.IsNotFound(err) || meta.IsNoMatchError(err) {
 				return true, nil
+			}
+			if err == nil {
+				live = l
 			}
 			return false, err
 		})
 		if err != nil {
-			return fmt.Errorf("waiting for %s to be deleted: %w", describe(o), err)
+			msg := fmt.Sprintf("%s was not deleted: %v", describe(o), err)
+			if live != nil {
+				msg += fmt.Sprintf("\n  deletionTimestamp=%v finalizers=%v\n%s",
+					live.GetDeletionTimestamp(), live.GetFinalizers(), summarizeConditions(live, nil))
+			}
+			return errors.New(msg)
 		}
 	}
 	return nil

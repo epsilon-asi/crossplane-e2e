@@ -56,6 +56,8 @@ type Suite struct {
 	cfg  Config
 	env  env.Environment
 	vars map[string]string
+	// cleanup deletes the generated cluster; nil when the cluster is kept.
+	cleanup *clusterCleanup
 }
 
 // NewSuite builds a suite from cfg, applying environment variable overrides.
@@ -101,7 +103,8 @@ func NewSuite(cfg Config) *Suite {
 	}
 	s.env.Setup(setup...)
 	if !cfg.KeepCluster {
-		s.env.Finish(deleteCluster(cfg.ClusterName))
+		s.cleanup = &clusterCleanup{name: cfg.ClusterName}
+		s.env.Finish(s.cleanup.finish)
 	}
 	return s
 }
@@ -110,7 +113,13 @@ func NewSuite(cfg Config) *Suite {
 func (s *Suite) Run(m *testing.M) int {
 	log.Printf("cluster=%s keep=%t k3s=%s crossplane=%s run_id=%s",
 		s.cfg.ClusterName, s.cfg.KeepCluster, s.cfg.K3sImage, s.cfg.Crossplane.Version, s.vars["RUN_ID"])
+	if s.cleanup != nil {
+		defer s.cleanup.watch()()
+	}
 	code := s.env.Run(m)
+	if s.cleanup != nil && s.cleanup.err != nil && code == 0 {
+		code = 1 // the cluster leaked
+	}
 	if s.cfg.KeepCluster {
 		log.Printf("cluster %q kept; delete it with: k3d cluster delete %s", s.cfg.ClusterName, s.cfg.ClusterName)
 	}
@@ -125,6 +134,16 @@ func (s *Suite) Test(t *testing.T, rt ResourceTest) {
 
 // Vars returns the substitution variables, including RUN_ID.
 func (s *Suite) Vars() map[string]string { return s.vars }
+
+// ClusterName returns the name of the suite's k3d cluster.
+func (s *Suite) ClusterName() string { return s.cfg.ClusterName }
+
+// KeepCluster reports whether the cluster is kept after the run.
+func (s *Suite) KeepCluster() bool { return s.cfg.KeepCluster }
+
+// EnvConf returns the e2e-framework configuration (including the cluster's
+// kubeconfig once env Setup has run), for tests that need their own client.
+func (s *Suite) EnvConf() *envconf.Config { return s.env.EnvConf() }
 
 func randomID() string {
 	b := make([]byte, 3)
