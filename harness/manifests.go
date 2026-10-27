@@ -41,7 +41,8 @@ func render(data []byte, vars map[string]string) ([]byte, error) {
 }
 
 // LoadObjects reads a (multi-document) YAML file, renders vars into it and
-// decodes every non-empty document.
+// decodes every non-empty document. When vars has a RUN_ID every object is
+// labelled with LabelRunID so the run's objects can be found later.
 func LoadObjects(path string, vars map[string]string) ([]*unstructured.Unstructured, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -66,6 +67,7 @@ func LoadObjects(path string, vars map[string]string) ([]*unstructured.Unstructu
 		}
 		objs = append(objs, u)
 	}
+	addLabels(objs, runLabels(vars))
 	return objs, nil
 }
 

@@ -9,3 +9,5 @@
 # Local credentials for paid-provider suites
 .env
 *.env
+# Agent worktrees
+.claude/worktrees/
