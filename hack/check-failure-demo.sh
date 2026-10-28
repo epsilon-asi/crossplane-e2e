@@ -15,8 +15,10 @@ fail() { echo "::error::failure demo ($mode): $*"; exit 1; }
 grep -q 'no leak: cluster' "$log" || fail "no 'no leak' confirmation in the output"
 
 if [ "$mode" = steps ]; then
-  ! grep -qE -- '--- PASS: TestExpectFail_' "$log" || fail "a TestExpectFail_ test passed"
-  grep -qE -- '--- FAIL: TestExpectFail_' "$log" || fail "no TestExpectFail_ test ran"
-  grep -qE -- '--- PASS: TestCleanupVerified' "$log" || fail "TestCleanupVerified did not pass"
+  # Only top-level results count: steps inside a failing test (e.g. its
+  # "create" step) are expected to pass.
+  ! grep -qE -- '^--- PASS: TestExpectFail_' "$log" || fail "a TestExpectFail_ test passed"
+  grep -qE -- '^--- FAIL: TestExpectFail_' "$log" || fail "no TestExpectFail_ test ran"
+  grep -qE -- '^--- PASS: TestCleanupVerified' "$log" || fail "TestCleanupVerified did not pass"
 fi
 echo "failure demo ($mode): failed as intended and cleaned up"
